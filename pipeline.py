@@ -23,6 +23,21 @@ class ReceiptStore:
             return list(self._receipts)
 
 
+class Outcome:
+    """Decides the outcome of one run. Only the first claim wins."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._value = None
+
+    def claim(self, value):
+        with self._lock:
+            if self._value is not None:
+                return False
+            self._value = value
+            return True
+
+
 class StageRunner:
     def __init__(self, store, timer_factory=threading.Timer, timeout=30.0):
         self._store = store
@@ -30,15 +45,18 @@ class StageRunner:
         self._timeout = timeout
 
     def run(self, run_id, work):
-        timer = self._timer_factory(self._timeout, lambda: self._on_timeout(run_id))
+        outcome = Outcome()
+        timer = self._timer_factory(
+            self._timeout, lambda: self._on_timeout(run_id, outcome)
+        )
         timer.start()
         try:
             work()
         finally:
             timer.cancel()
-        if not self._store.has(run_id):
+        if outcome.claim("done"):
             self._store.write(run_id, "done")
 
-    def _on_timeout(self, run_id):
-        if not self._store.has(run_id):
+    def _on_timeout(self, run_id, outcome):
+        if outcome.claim("timeout"):
             self._store.write(run_id, "timeout")
